@@ -97,6 +97,19 @@ def finish_text_response(
     # ``api_content`` sidecar, so the next turn still replays it byte-identically.
     _content = assistant_message.content
     _promoted = None
+    # Local patch (display.show_reasoning gate): never deliver chain-of-thought as the
+    # visible answer when reasoning display is OFF — leave final_response empty so the
+    # empty-response ladder below regenerates a real reply. _promoted stays set so the
+    # stall diagnostics below keep their original semantics.
+    _show_reasoning = True
+    try:
+        from hermes_cli.config import cfg_get, load_config_readonly
+
+        _show_reasoning = bool(
+            cfg_get(load_config_readonly(), "display", "show_reasoning", default=True)
+        )
+    except Exception:
+        _show_reasoning = True  # fail open: config unreadable → original behaviour
     if (
         finish_reason == "stop"
         and not assistant_message.tool_calls
@@ -107,12 +120,15 @@ def finish_text_response(
             # WARNING, not INFO: a model that keeps ending turns this way is stalled
             # (planning monologue, zero tool calls) while the turn reports "complete".
             logger.warning(
-                "Reasoning-only clean stop (%d chars) — returning the reasoning as the final "
-                "response (model=%s provider=%s api_calls=%d tool_turns=%d)",
-                len(_promoted), agent.model, agent.provider, api_call_count,
+                "Reasoning-only clean stop (%d chars) — %s (model=%s provider=%s api_calls=%d tool_turns=%d)",
+                len(_promoted),
+                "returning the reasoning as the final response"
+                if _show_reasoning
+                else "withheld (display.show_reasoning=false); empty-response ladder will regenerate",
+                agent.model, agent.provider, api_call_count,
                 sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")),
             )
-    final_response = _promoted or assistant_message.content or ""
+    final_response = (_promoted if _show_reasoning else None) or assistant_message.content or ""
     # Unmute: _mute_post_response from a housekeeping tool turn must not silence
     # empty-response warnings on the final response path.
     agent._mute_post_response = False

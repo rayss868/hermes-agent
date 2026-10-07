@@ -134,6 +134,16 @@ def _terminal_empty(agent: Any, assistant_message: Any, finish_reason: str, mess
     agent._emit_diagnostic_status(
         "⚠️ Model produced reasoning but no visible response after all retries. Returning empty."
     )
+    # Local patch (display.show_reasoning gate): the preview above is for the log only
+    # when reasoning display is OFF — delivery falls through to the "(empty)" sentinel
+    # like the no-reasoning branch, instead of copying chain-of-thought into chat.
+    try:
+        from hermes_cli.config import cfg_get, load_config_readonly
+
+        if not bool(cfg_get(load_config_readonly(), "display", "show_reasoning", default=True)):
+            return "(empty)"
+    except Exception:
+        pass  # fail open: config unreadable → original behaviour
     return site_copy("reasoning_only", model=agent.model, preview=reasoning_preview)
 
 
