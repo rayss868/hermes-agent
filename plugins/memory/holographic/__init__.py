@@ -191,13 +191,36 @@ class HolographicMemoryProvider(MemoryProvider):
         if is_truthy_value(self._config.get("auto_extract", False)) and self._store and messages:
             self._auto_extract_facts(messages)
 
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror built-in memory writes as facts."""
-        if action == "add" and self._store and content:
-            try:
-                self._store.add_fact(content, category="user_pref" if target == "user" else "general")
-            except Exception as e:
-                logger.debug("Holographic memory_write mirror failed: %s", e)
+    def on_memory_write(self, action: str, target: str, content: str,
+                        metadata: Dict[str, Any] | None = None) -> None:
+        """Mirror built-in memory writes as facts: ``add`` inserts, ``replace`` rewrites the
+        mirrored copy in place so the old text does not linger as a stale contradictory fact.
+        ``remove`` is not mirrored — a MEMORY.md deletion is an editorial call on an always-on
+        rule, and the mirrored fact is a separate queryable record of it."""
+        if not self._store or not content or action not in ("add", "replace"):
+            return
+        category = "user_pref" if target == "user" else "general"
+        try:
+            if action == "replace":
+                previous = (metadata or {}).get("previous_content")
+                fact_id = self._find_fact_id(previous) if isinstance(previous, str) and previous else None
+                if fact_id is not None:
+                    self._store.update_fact(fact_id, content=content)
+                    return
+                # Previous text never mirrored (or normalised away): fall through to add_fact,
+                # whose UNIQUE content makes the retry an idempotent no-op when already stored.
+            self._store.add_fact(content, category=category)
+        except Exception as e:
+            logger.debug("Holographic memory_write mirror failed: %s", e)
+
+    def _find_fact_id(self, content: str) -> int | None:
+        """Resolve a mirrored fact by its exact stored text, so ``replace`` updates instead of duplicates."""
+        try:
+            row = self._store._one("SELECT fact_id FROM facts WHERE content = ?", (content.strip(),))
+        except Exception as e:
+            logger.debug("Holographic mirror lookup failed: %s", e)
+            return None
+        return int(row["fact_id"]) if row else None
 
     def shutdown(self) -> None:
         # Close on the caller's thread: leaving the shared connection (+ write lock) to GC keeps it alive on a gateway.

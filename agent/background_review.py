@@ -337,16 +337,23 @@ def _digest_history(messages_snapshot: List[Dict], tail: int = 24) -> List[Dict]
 # fork must pick one per fact. Without this the reviewer wrote profile data into MEMORY.md and the
 # same lesson into both stores until both hit their size limits (#30220).
 _MEMORY_ROUTING_BLOCK = (
-    "TWO distinct stores — pick the right one for each fact:\n"
+    "THREE distinct stores — pick the right one for each fact:\n"
     "  • USER.md (memory tool, target='user'): who the user is — persona, preferences, "
     "communication and work style, personal details they revealed, and expectations about how you "
     "should behave.\n"
     "  • MEMORY.md (memory tool, target='memory'): facts about the ENVIRONMENT you operate in — "
-    "tool quirks, project conventions, config gotchas, paths and endpoints that matter.\n\n"
+    "tool quirks, project conventions, config gotchas, paths and endpoints that matter. It is "
+    "injected into EVERY session and size-capped, so keep it to always-on principles and "
+    "directives only.\n"
+    "  • fact_store (fact_store tool, action='add'): durable facts worth QUERYING LATER — research "
+    "findings with their sources, project state and decisions, tool/API quirks, named entities and "
+    "how they relate. It is retrieved on demand and never injected, so it costs no standing "
+    "context. Anything that is a fact to recall rather than a rule to obey belongs here.\n\n"
     "One fact goes to ONE store, never both — writing it to both bloats both files until they hit "
     "their size limits and crowds out the facts that matter; misrouting it puts it where the next "
     "session won't look. If the tool schema lists only one "
-    "target, that store is the only one enabled — use it and skip the other.\n\n"
+    "target, that store is the only one enabled — use it and skip the others. If fact_store is not "
+    "in the tool schema it is not enabled: fall back to MEMORY.md and skip it.\n\n"
 )
 
 _MEMORY_REVIEW_PROMPT = (
