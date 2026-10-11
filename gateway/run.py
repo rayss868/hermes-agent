@@ -2805,6 +2805,26 @@ def _skill_slug_from_frontmatter(skill_md: Path) -> tuple[str | None, str | None
     return (slug or None), declared_name
 
 
+def _is_installed_skill(declared_name: str, slug: str) -> bool:
+    """True when the skill is recorded as installed in the hub lock file.
+
+    Used by :func:`_check_unavailable_skill` to distinguish a genuinely uninstalled optional
+    skill from one that was installed after this gateway process started: the install runs in
+    a separate process that cannot clear our in-memory slash-command map, so the hint would
+    otherwise keep telling the user to install a skill that already exists.
+    """
+    try:
+        from tools.skills_hub import HubLockFile
+
+        if HubLockFile().get_installed(declared_name):
+            return True
+        # Directory-name skills and frontmatter names drift; the slug is what the command map
+        # registered, so treat a slug match as installed too.
+        return bool(HubLockFile().get_installed(slug))
+    except Exception:
+        return False
+
+
 def _check_unavailable_skill(command_name: str) -> str | None:
     """Hint when a command matches a skill that is disabled or optional-install only; else None."""
     normalized = command_name.lower().replace("_", "-")
@@ -2826,7 +2846,13 @@ def _check_unavailable_skill(command_name: str) -> str | None:
                 if slug == normalized and declared_name in disabled:
                     return t("gateway.skills.disabled", name=command_name)
 
-        # Check optional skills (shipped with repo but not installed)
+        # Check optional skills (shipped with repo but not installed).
+        # Only reach this when the loop above found no installed match: the skill is neither
+        # installed-and-enabled nor installed-and-disabled, so an optional-source copy is the
+        # only remaining explanation. Without this gate, a skill installed while the gateway
+        # process was already running (the install is a separate process that cannot clear the
+        # gateway's in-memory command map) would fall through to this branch and be told to
+        # install itself again. The hub lock file is the authoritative install record.
         from hermes_constants import get_optional_skills_dir
         repo_root = Path(__file__).resolve().parent.parent
         optional_dir = get_optional_skills_dir(repo_root / "optional-skills")
@@ -2837,6 +2863,12 @@ def _check_unavailable_skill(command_name: str) -> str | None:
                 slug, _declared = _skill_slug_from_frontmatter(skill_md)
                 if not slug or slug != normalized:
                     continue
+                # Declared name (or the slug) already installed? The command map in this
+                # process is simply stale, so no "not installed" hint: a wrong install
+                # suggestion is worse than a generic unknown-command reply, and /reload-skills
+                # refreshes the map.
+                if _is_installed_skill(_declared, slug):
+                    return None
                 # Install path: official/<category>/<name>
                 rel = skill_md.parent.relative_to(optional_dir)
                 install_path = f"official/{'/'.join(rel.parts)}"
