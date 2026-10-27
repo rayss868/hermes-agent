@@ -100,3 +100,76 @@ def test_unknown_command_still_returns_none(
         assert gateway_run._check_unavailable_skill("no-such-skill") is None
 
 
+def test_optional_skill_installed_after_gateway_start_is_not_hinted_as_missing(
+    tmp_skills: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An optional skill that IS installed must not suggest re-installing itself.
+
+    Regression: ``hermes skills install`` runs in a separate process that clears the skills
+    *prompt* cache but not the gateway process's in-memory slash-command map, so a skill
+    installed while the gateway was already running was absent from that stale map, fell
+    through to the optional-skills branch, and the user was told to install a skill they
+    had just installed (observed with ``/godmode``). The hub lock file is authoritative.
+    """
+    from gateway import run as gateway_run
+
+    # An optional-source copy exists in the repo but the skill is not in the (stale) installed
+    # skills dirs scan, and is not disabled — exactly the stale-gateway situation.
+    optional_dir = tmp_path / "optional-skills" / "security" / "some-skill"
+    optional_dir.mkdir(parents=True)
+    _write_skill(optional_dir, "some-skill", "Some Skill")
+    monkeypatch.setattr(
+        "hermes_constants.get_optional_skills_dir", lambda default=None: optional_dir.parent
+    )
+
+    installed = {"Some Skill": {"install_path": "security/some-skill"}}
+
+    class _FakeHubLockFile:
+        def get_installed(self, name: str):
+            return installed.get(name)
+
+    with patch(
+        "tools.skills_tool._get_disabled_skill_names", return_value=set()
+    ), patch(
+        "agent.skill_utils.get_all_skills_dirs", return_value=[tmp_skills]
+    ), patch(
+        "tools.skills_hub.HubLockFile", _FakeHubLockFile
+    ):
+        msg = gateway_run._check_unavailable_skill("some-skill")
+
+    assert msg is None, (
+        "an installed optional skill was reported as 'not installed'; the gateway's stale "
+        "command map made it fall through to the optional-skills branch"
+    )
+
+
+def test_optional_skill_genuinely_missing_still_hinted(
+    tmp_skills: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The install hint still fires for an optional skill that is NOT installed."""
+    from gateway import run as gateway_run
+
+    optional_dir = tmp_path / "optional-skills" / "security" / "cool-skill"
+    optional_dir.mkdir(parents=True)
+    _write_skill(optional_dir, "cool-skill", "Cool Skill")
+    monkeypatch.setattr(
+        "hermes_constants.get_optional_skills_dir", lambda default=None: optional_dir.parent
+    )
+
+    class _FakeHubLockFile:
+        def get_installed(self, name: str):
+            return None
+
+    with patch(
+        "tools.skills_tool._get_disabled_skill_names", return_value=set()
+    ), patch(
+        "agent.skill_utils.get_all_skills_dirs", return_value=[tmp_skills]
+    ), patch(
+        "tools.skills_hub.HubLockFile", _FakeHubLockFile
+    ):
+        msg = gateway_run._check_unavailable_skill("cool-skill")
+
+    assert msg is not None and "not installed" in msg.lower()
+    assert "official/cool-skill/cool-skill" in msg
+
+
